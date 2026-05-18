@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Julia Reagan Billboard Tracker</title>
+    <meta name="description" content="A simple map to track billboard locations along the Wasatch Front.">
+    <!-- SVG Favicon: Matches the map's red billboard icon -->
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><rect x='16' y='30' width='4' height='18' fill='%23444'/><rect x='28' y='30' width='4' height='18' fill='%23444'/><rect x='2' y='4' width='44' height='26' rx='3' fill='%23222'/><rect x='4' y='6' width='40' height='22' rx='1.5' fill='%23ea4335'/><rect x='7' y='9' width='34' height='16' rx='1' fill='%23fff'/><circle cx='15' cy='17' r='4' fill='%23ea4335' opacity='0.8'/><rect x='22' y='13' width='14' height='3' rx='1.5' fill='%23ea4335' opacity='0.6'/><rect x='22' y='18' width='10' height='2.5' rx='1' fill='%23ea4335' opacity='0.4'/></svg>">
+    <style>
+        /* 
+         * Clean, minimalist layout.
+         * Full-screen Google Maps window (100% width and height, no scrollbars).
+         */
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            /* Prevents scrollbars */
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #1e1e1e;
+        }
+
+        #map {
+            height: calc(100% - 32px);
+            /* Leave 32px at the bottom for the disclaimer */
+            width: 100%;
+        }
+
+        /* Disclaimer Banner */
+        #disclaimer-banner {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 32px;
+            background: #111;
+            color: #888;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 11px;
+            z-index: 100;
+            border-top: 1px solid #222;
+        }
+
+        /* Styling for the fallback message if API key is missing */
+        .fallback-message {
+            display: flex;
+            height: 100%;
+            width: 100%;
+            align-items: center;
+            justify-content: center;
+            background: #111;
+            color: #fff;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .fallback-message div {
+            background: #222;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .fallback-message h2 {
+            margin-top: 0;
+            color: #e0e0e0;
+        }
+
+        .fallback-message code {
+            background: #333;
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: #4CAF50;
+        }
+
+        /* Basic info window styling */
+        .info-window-content {
+            padding: 8px 4px;
+            font-family: inherit;
+            color: #333;
+            max-width: 250px;
+            line-height: 1.4;
+        }
+
+        .info-window-content strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #111;
+        }
+
+        /* Glassmorphic premium banner */
+        #banner {
+            position: absolute;
+            top: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 30, 30, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #ffffff;
+            padding: 14px 28px;
+            border-radius: 30px;
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 10;
+            pointer-events: none;
+            /* Allows clicking the map underneath */
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #banner::before {
+            content: '📍';
+            font-size: 18px;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+        }
+
+        /* Rating System UI */
+        .rating-container {
+            margin: 12px 0 8px 0;
+            text-align: center;
+            background: #f9f9f9;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #eee;
+        }
+
+        .stars {
+            display: inline-flex;
+            flex-direction: row-reverse;
+            font-size: 26px;
+            line-height: 1;
+        }
+
+        .stars input {
+            display: none;
+        }
+
+        .stars label {
+            color: #ddd;
+            cursor: pointer;
+            transition: color 0.2s, transform 0.1s;
+        }
+
+        .stars label:hover,
+        .stars label:hover~label,
+        .stars input:checked~label {
+            color: #f5b301;
+        }
+
+        .stars label:active {
+            transform: scale(0.9);
+        }
+
+        .rating-text {
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 4px;
+        }
+
+        .average-rating {
+            color: #f5b301;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        /* Custom Modal for Pin Drops */
+        #pin-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        #pin-modal.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .modal-content {
+            background: rgba(30, 30, 30, 0.95);
+            padding: 30px;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 350px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            font-family: inherit;
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-content h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #ffffff;
+            font-size: 22px;
+        }
+
+        .modal-content p {
+            margin: 0 0 15px 0;
+            color: #b0b0b0;
+            font-size: 14px;
+        }
+
+        #billboard-note {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            box-sizing: border-box;
+            color: white;
+            font-size: 15px;
+            margin-bottom: 20px;
+            font-family: inherit;
+        }
+
+        #billboard-note:focus {
+            outline: none;
+            border-color: #4285f4;
+        }
+
+        .color-options {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .color-options label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            color: #ddd;
+            cursor: pointer;
+        }
+
+        .color-swatch {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .color-swatch.red {
+            background: #ea4335;
+        }
+
+        .color-swatch.blue {
+            background: #4285f4;
+        }
+
+        .color-swatch.green {
+            background: #34a853;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .modal-actions button {
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #modal-cancel {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        #modal-cancel:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        #modal-save {
+            background: #4285f4;
+            color: white;
+        }
+
+        #modal-save:hover {
+            background: #3367d6;
+        }
+
+        /* Welcome Title Card */
+        #welcome-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        #welcome-modal.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .welcome-content {
+            background: rgba(30, 30, 30, 0.85);
+            padding: 30px;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 450px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            font-family: inherit;
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+            text-align: center;
+        }
+
+        .welcome-content h2 {
+            margin-top: 0;
+            color: #ffffff;
+            font-size: 24px;
+        }
+
+        .welcome-content p {
+            color: #b0b0b0;
+            line-height: 1.6;
+            margin-bottom: 25px;
+            font-size: 15px;
+        }
+
+        .welcome-close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 28px;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .welcome-close-btn:hover {
+            color: white;
+        }
+
+        .welcome-start-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background 0.2s;
+            width: 100%;
+        }
+
+        .welcome-start-btn:hover {
+            background: #3367d6;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Welcome Title Card Modal -->
+    <div id="welcome-modal">
+        <div class="welcome-content">
+            <button id="welcome-close" class="welcome-close-btn">&times;</button>
+            <h2>Julia Reagan Sightings</h2>
+            <p>You may have seen the Julia Reagan billboards return to the Wasatch Front. Be part of a community
+                dedicated to locating each one!</p>
+            <button id="welcome-start" class="welcome-start-btn">Start Tracking</button>
+        </div>
+    </div>
+
+    <!-- Premium glassmorphic banner -->
+    <div id="banner">Click map to mark Julia Reagan sighting</div>
+
+    <!-- Custom Modal for Pin Details -->
+    <div id="pin-modal" class="hidden">
+        <div class="modal-content">
+            <h3>Julia spotted!</h3>
+            <p>Enter details about this sighting:</p>
+            <input type="text" id="billboard-note" placeholder="Location details..." />
+
+            <p>Billboard Background Color:</p>
+            <div class="color-options">
+                <label><input type="radio" name="bColor" value="#ea4335" checked> <span class="color-swatch red"></span>
+                    Red</label>
+                <label><input type="radio" name="bColor" value="#4285f4"> <span class="color-swatch blue"></span>
+                    Blue</label>
+                <label><input type="radio" name="bColor" value="#34a853"> <span class="color-swatch green"></span>
+                    Green</label>
+            </div>
+
+            <p style="margin-top: 15px; margin-bottom: 5px;">Rate this billboard:</p>
+            <div class="stars"
+                style="font-size: 32px; justify-content: center; display: flex; margin-bottom: 20px; width: 100%;">
+                <input type="radio" name="mRating" id="mstar5" value="5"><label for="mstar5">★</label>
+                <input type="radio" name="mRating" id="mstar4" value="4"><label for="mstar4">★</label>
+                <input type="radio" name="mRating" id="mstar3" value="3"><label for="mstar3">★</label>
+                <input type="radio" name="mRating" id="mstar2" value="2"><label for="mstar2">★</label>
+                <input type="radio" name="mRating" id="mstar1" value="1"><label for="mstar1">★</label>
+            </div>
+
+            <div class="modal-actions">
+                <button id="modal-cancel">Cancel</button>
+                <button id="modal-save">Save Pin</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Container that takes up the screen minus the disclaimer -->
+    <div id="map"></div>
+
+    <!-- Legal Disclaimer -->
+    <div id="disclaimer-banner">
+        Disclaimer: This site is not affiliated in any way with Reagan Outdoor Advertising and will be taken down upon
+        request.
+    </div>
+
+    <script>
+        // =========================================================================
+        // 🛑 CONFIGURATION PLACEHOLDERS 🛑
+        // Paste your API keys and Database URLs below. 
+        // These are intentionally kept at the top for easy access.
+        // =========================================================================
+
+        // 1. Google Maps API Key
+        // Get this from the Google Cloud Console (needs Maps JavaScript API enabled).
+        const GOOGLE_MAPS_API_KEY = "AIzaSyAYqCXRtZZtJxiE_pdgHn44bO6HaUvG2xA";
+
+        // 2. Database URL (e.g., Supabase REST URL or Firebase Realtime DB URL)
+        // Example Supabase: "https://your-project.supabase.co/rest/v1/billboards"
+        // Example Firebase: "https://your-project.firebaseio.com/billboards.json"
+        const DB_URL = "https://fjicvhkzcdzxtnoxqkhv.supabase.co/rest/v1/billboards";
+
+        // 3. Database API Key (e.g., Supabase anon key)
+        // If using Firebase without rules, you can leave this alone.
+        const DB_API_KEY = "sb_publishable_Kj-5AGdk60Gcrm7s4dO0Wg_VJZ-wtac";
+
+        // =========================================================================
+
+        // --- Rate Limiting Logic (Client-Side) ---
+        function canUserAddPin() {
+            const now = Date.now();
+            const fifteenMins = 15 * 60 * 1000; // 15 minutes in milliseconds
+
+            // Retrieve history from local storage
+            let history = JSON.parse(localStorage.getItem('pin_history') || '[]');
+
+            // Clean up history (remove timestamps older than 15 mins)
+            history = history.filter(time => now - time < fifteenMins);
+            localStorage.setItem('pin_history', JSON.stringify(history));
+
+            return history.length < 10; // Allow if under 10 pins in the time window
+        }
+
+        function recordPinAdd() {
+            let history = JSON.parse(localStorage.getItem('pin_history') || '[]');
+            history.push(Date.now());
+            localStorage.setItem('pin_history', JSON.stringify(history));
+        }
+
+        let map;
+        let infoWindow;
+        let AdvancedMarkerElement;
+        let currentClickLatLng = null;
+        let allRatings = []; // Global cache for all billboard ratings
+
+        // Entry point function
+        function loadGoogleMaps() {
+            // Check if the user updated the API key before attempting to load the map
+            if (GOOGLE_MAPS_API_KEY === "YOUR_GOOGLE_MAPS_API_KEY_HERE") {
+                console.error("Google Maps API key is missing. Please set it in the script to load the map.");
+                document.getElementById('map').innerHTML = `
+                    <div class="fallback-message">
+                        <div>
+                            <h2>Map Configuration Required</h2>
+                            <p>Please open <code>index.html</code> and insert your <strong>Google Maps API Key</strong> at the top of the script.</p>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            // Load the Google Maps base script with the marker library included
+            const script = document.createElement("script");
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&v=weekly&libraries=marker`;
+            script.async = true;
+            script.defer = true;
+            script.onload = () => { initMap(); };
+            document.head.appendChild(script);
+        }
+
+        async function initMap() {
+            try {
+                // With the libraries=marker script loaded, these are available directly
+                const Map = google.maps.Map;
+                const InfoWindow = google.maps.InfoWindow;
+                AdvancedMarkerElement = google.maps.marker.AdvancedMarkerElement;
+
+                // Center over Wasatch Front (Murray/Sandy, Utah)
+                const wasatchFront = { lat: 40.6200, lng: -111.8900 };
+
+                // Initialize the Map with a clean look
+                map = new Map(document.getElementById("map"), {
+                    zoom: 10,
+                    center: wasatchFront,
+                    mapId: "86afba74d3a1e3467e37b001", // Required to use AdvancedMarkerElement
+                    disableDefaultUI: true,            // Hides default map controls for a minimalist UI
+                    zoomControl: true,                 // Keep the zoom buttons for usability
+                    gestureHandling: "greedy"          // Ensures panning/zooming works seamlessly without needing ctrl/cmd
+                });
+
+                // Initialize a single reusable InfoWindow
+                infoWindow = new InfoWindow();
+
+                // 1. Fetch and load all existing pins on startup
+                await loadPins();
+
+                // 2. Setup pin dropping mechanism on map click
+                map.addListener("click", (event) => {
+                    // Check local rate limits before allowing the user to drop a pin
+                    if (!canUserAddPin()) {
+                        alert("You've reached the limit of 10 pins per 15 minutes to prevent spam. Please wait a few minutes before adding more!");
+                        return;
+                    }
+
+                    currentClickLatLng = { lat: event.latLng.lat(), lng: event.latLng.lng() };
+
+                    // Pre-fill the modal input with default label
+                    document.getElementById('billboard-note').value = 'Julia spotted!';
+
+                    // Show modal
+                    document.getElementById('pin-modal').classList.remove('hidden');
+                });
+
+                // 3. Setup Modal Button Listeners
+                document.getElementById('modal-cancel').addEventListener('click', () => {
+                    document.getElementById('pin-modal').classList.add('hidden');
+                    currentClickLatLng = null;
+                });
+
+                document.getElementById('modal-save').addEventListener('click', async () => {
+                    if (!currentClickLatLng) return;
+
+                    const noteInput = document.getElementById('billboard-note').value.trim();
+                    const note = noteInput === "" ? "Julia spotted!" : noteInput;
+                    const color = document.querySelector('input[name="bColor"]:checked').value;
+                    const ratingEl = document.querySelector('input[name="mRating"]:checked');
+                    const initialRating = ratingEl ? parseInt(ratingEl.value) : null;
+
+                    const markerData = {
+                        lat: currentClickLatLng.lat,
+                        lng: currentClickLatLng.lng,
+                        note: note,
+                        color: color
+                    };
+
+                    // Drop the pin on the map visually
+                    const newMarker = addMarkerToMap(markerData);
+
+                    // Save to backend and wait for the new ID
+                    const savedId = await savePinToDatabase(markerData, newMarker);
+
+                    // If they selected a rating during creation, save it immediately
+                    if (savedId && initialRating) {
+                        const ratingsUrl = DB_URL.replace('/billboards', '/ratings');
+                        try {
+                            await fetch(ratingsUrl, {
+                                method: 'POST',
+                                headers: getDbHeaders(),
+                                body: JSON.stringify({ billboard_id: savedId, rating: initialRating })
+                            });
+                            localStorage.setItem(`rated_${savedId}`, 'true');
+                            allRatings.push({ billboard_id: savedId, rating: initialRating });
+                        } catch (e) {
+                            console.error("Failed to save initial rating", e);
+                        }
+                    }
+
+                    // Record the successful drop for rate limiting
+                    recordPinAdd();
+
+                    // Hide modal and clear forms
+                    document.getElementById('pin-modal').classList.add('hidden');
+                    if (ratingEl) ratingEl.checked = false;
+                    currentClickLatLng = null;
+                });
+
+            } catch (error) {
+                console.error("Failed to initialize Google Maps:", error);
+            }
+        }
+
+        // ==========================================
+        // MAP UI OPERATIONS
+        // ==========================================
+
+        function addMarkerToMap(data) {
+            const position = { lat: data.lat, lng: data.lng };
+
+            // Build a Custom SVG Billboard graphic matching the selected color
+            const billboardColor = data.color || '#ea4335'; // Fallback to red
+
+            const billboardSvg = `
+                <svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4)); transform: translateY(-5px);">
+                    <!-- Ground shadow -->
+                    <ellipse cx="24" cy="46" rx="12" ry="2" fill="rgba(0,0,0,0.3)" />
+                    <!-- Wooden/Metal Posts -->
+                    <rect x="16" y="30" width="4" height="18" fill="#444" />
+                    <rect x="28" y="30" width="4" height="18" fill="#444" />
+                    <!-- Board Outer Frame -->
+                    <rect x="2" y="4" width="44" height="26" rx="3" fill="#222" />
+                    <!-- Board Colored Accent -->
+                    <rect x="4" y="6" width="40" height="22" rx="1.5" fill="${billboardColor}" />
+                    <!-- Inner White Ad Space -->
+                    <rect x="7" y="9" width="34" height="16" rx="1" fill="#fff" />
+                    <!-- Placeholder Ad Graphic -->
+                    <circle cx="15" cy="17" r="4" fill="${billboardColor}" opacity="0.8" />
+                    <rect x="22" y="13" width="14" height="3" rx="1.5" fill="${billboardColor}" opacity="0.6" />
+                    <rect x="22" y="18" width="10" height="2.5" rx="1" fill="${billboardColor}" opacity="0.4" />
+                </svg>
+            `;
+
+            const customMarkerDiv = document.createElement("div");
+            customMarkerDiv.innerHTML = billboardSvg;
+            customMarkerDiv.style.cursor = "pointer"; // Hand cursor to show it's clickable
+
+            // Create a modern AdvancedMarkerElement with the custom HTML content
+            const marker = new AdvancedMarkerElement({
+                map: map,
+                position: position,
+                title: data.note, // Shows on hover natively
+                content: customMarkerDiv
+            });
+
+            // Store the database ID directly on the marker object
+            marker.dbId = data.id;
+
+            // Build the InfoWindow content (extracted so it can be refreshed after rating)
+            const buildInfoContent = () => {
+                const billboardId = marker.dbId; // Use dbId to handle new pins dynamically
+
+                const container = document.createElement('div');
+                container.className = 'info-window-content';
+
+                const text = document.createElement('div');
+                text.innerHTML = `<strong>Billboard Details:</strong>${data.note}`;
+                container.appendChild(text);
+
+                // --- Rating UI ---
+                const ratingDiv = document.createElement('div');
+                ratingDiv.className = 'rating-container';
+
+                // Calculate stats
+                const billboardRatings = allRatings.filter(r => r.billboard_id === billboardId);
+                const count = billboardRatings.length;
+                const average = count > 0 ? (billboardRatings.reduce((sum, r) => sum + r.rating, 0) / count).toFixed(1) : 0;
+
+                const statsDiv = document.createElement('div');
+                statsDiv.className = 'rating-text';
+                if (count > 0) {
+                    statsDiv.innerHTML = `Average: <span class="average-rating">★ ${average}</span> (${count} ${count === 1 ? 'rating' : 'ratings'})`;
+                } else {
+                    statsDiv.innerHTML = `<em>No ratings yet</em>`;
+                }
+                ratingDiv.appendChild(statsDiv);
+
+                // Interactive Stars (only if they haven't rated it yet, and the pin is saved in DB)
+                const hasRated = billboardId ? localStorage.getItem(`rated_${billboardId}`) : false;
+
+                if (!hasRated && billboardId) {
+                    const starsDiv = document.createElement('div');
+                    starsDiv.className = 'stars';
+                    // We generate 5 stars. CSS row-reverse trick requires 5 to 1 order
+                    for (let i = 5; i >= 1; i--) {
+                        const radio = document.createElement('input');
+                        radio.type = 'radio';
+                        radio.name = `rating_${billboardId}`;
+                        radio.id = `star_${billboardId}_${i}`;
+                        radio.value = i;
+
+                        const label = document.createElement('label');
+                        label.htmlFor = `star_${billboardId}_${i}`;
+                        label.innerHTML = '★';
+
+                        radio.addEventListener('change', async () => {
+                            if (radio.checked) {
+                                ratingDiv.style.opacity = '0.5';
+                                const ratingsUrl = DB_URL.replace('/billboards', '/ratings');
+                                try {
+                                    const response = await fetch(ratingsUrl, {
+                                        method: 'POST',
+                                        headers: getDbHeaders(),
+                                        body: JSON.stringify({ billboard_id: billboardId, rating: i })
+                                    });
+                                    if (!response.ok) throw new Error("Failed");
+
+                                    localStorage.setItem(`rated_${billboardId}`, 'true');
+                                    allRatings.push({ billboard_id: billboardId, rating: i });
+
+                                    // Refresh the popup to show new average
+                                    infoWindow.setContent(buildInfoContent());
+                                } catch (e) {
+                                    alert("Error submitting rating. Make sure you created the ratings table in Supabase!");
+                                    ratingDiv.style.opacity = '1';
+                                }
+                            }
+                        });
+
+                        starsDiv.appendChild(radio);
+                        starsDiv.appendChild(label);
+                    }
+
+                    const promptDiv = document.createElement('div');
+                    promptDiv.style.cssText = 'font-size: 11px; margin-top: 5px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;';
+                    promptDiv.innerText = "Rate this sighting";
+
+                    ratingDiv.appendChild(promptDiv);
+                    ratingDiv.appendChild(starsDiv);
+                } else if (hasRated) {
+                    const thanksDiv = document.createElement('div');
+                    thanksDiv.style.cssText = 'font-size: 12px; margin-top: 5px; color: #34a853; font-weight: bold;';
+                    thanksDiv.innerText = "✓ You rated this";
+                    ratingDiv.appendChild(thanksDiv);
+                }
+
+                container.appendChild(ratingDiv);
+                // -----------------
+
+                const hr = document.createElement('hr');
+                hr.style.cssText = 'border: none; border-top: 1px solid #eee; margin: 8px 0;';
+                container.appendChild(hr);
+
+                const delBtn = document.createElement('button');
+                delBtn.innerText = 'Delete Pin';
+                delBtn.style.cssText = 'background: #ea4335; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%; font-weight: 500; transition: background 0.2s;';
+
+                delBtn.onmouseover = () => delBtn.style.background = '#d33426';
+                delBtn.onmouseout = () => delBtn.style.background = '#ea4335';
+
+                delBtn.onclick = async () => {
+                    const idToDelete = marker.dbId;
+                    if (idToDelete) {
+                        delBtn.innerText = "Deleting...";
+                        delBtn.style.background = "#999";
+                        delBtn.disabled = true;
+                        await deletePinFromDatabase(idToDelete);
+                    }
+                    marker.map = null; // Visually remove from map
+                    infoWindow.close();
+                };
+
+                container.appendChild(delBtn);
+                return container;
+            };
+
+            // When a pin is clicked, open the standard InfoWindow displaying the note
+            marker.addListener("click", () => {
+                infoWindow.setContent(buildInfoContent());
+                infoWindow.open(map, marker);
+            });
+
+            return marker;
+        }
+
+        // ==========================================
+        // DATABASE OPERATIONS
+        // ==========================================
+
+        // Prepare authorization headers for database requests (e.g., Supabase)
+        function getDbHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (DB_API_KEY && DB_API_KEY !== "YOUR_DATABASE_API_KEY_HERE") {
+                headers['apikey'] = DB_API_KEY;
+                headers['Authorization'] = `Bearer ${DB_API_KEY}`;
+                headers['Prefer'] = 'return=representation'; // Ensures DB returns the new ID on insert
+            }
+            return headers;
+        }
+
+        // Fetch existing pins from the database on page load
+        async function loadPins() {
+            if (DB_URL === "YOUR_DATABASE_URL_HERE") {
+                console.warn("Database URL not set. Cannot load existing pins from backend.");
+                return;
+            }
+
+            try {
+                const response = await fetch(DB_URL, {
+                    method: 'GET',
+                    headers: getDbHeaders()
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Database GET request failed with status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Fetch ratings as well
+                const ratingsUrl = DB_URL.replace('/billboards', '/ratings');
+                try {
+                    const ratingsResponse = await fetch(ratingsUrl, { headers: getDbHeaders() });
+                    if (ratingsResponse.ok) {
+                        allRatings = await ratingsResponse.json();
+                    }
+                } catch (e) {
+                    console.warn("Could not load ratings. Make sure the ratings table exists.");
+                }
+
+                // Parse the response depending on if it's an array (Supabase/PostgREST) 
+                // or an object dictionary (Firebase Realtime DB)
+                if (Array.isArray(data)) {
+                    data.forEach(pin => {
+                        if (pin.lat && pin.lng && pin.note) addMarkerToMap(pin);
+                    });
+                } else if (typeof data === 'object' && data !== null) {
+                    Object.values(data).forEach(pin => {
+                        if (pin.lat && pin.lng && pin.note) addMarkerToMap(pin);
+                    });
+                }
+            } catch (error) {
+                console.error("Error loading pins from database:", error);
+            }
+        }
+
+        // Save a new pin to the database after user clicks and enters details
+        async function savePinToDatabase(data, markerReference) {
+            if (DB_URL === "YOUR_DATABASE_URL_HERE") {
+                console.warn("Database URL not set. Pin was dropped on the map locally but NOT saved.");
+                return null;
+            }
+
+            try {
+                const response = await fetch(DB_URL, {
+                    method: 'POST',
+                    headers: getDbHeaders(),
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Database POST request failed with status: ${response.status}`);
+                }
+
+                // Attach the newly generated database ID to the marker so it can be deleted
+                const responseData = await response.json();
+                if (Array.isArray(responseData) && responseData.length > 0) {
+                    const newId = responseData[0].id;
+                    markerReference.dbId = newId;
+                    console.log("Billboard spot successfully saved to database.");
+                    return newId;
+                }
+            } catch (error) {
+                console.error("Error saving pin to database:", error);
+            }
+            return null;
+        }
+
+        // Delete a pin from the database
+        async function deletePinFromDatabase(id) {
+            if (DB_URL === "YOUR_DATABASE_URL_HERE" || !id) return;
+
+            try {
+                // Supabase REST requires the query parameter for deletion (e.g. ?id=eq.123)
+                const response = await fetch(`${DB_URL}?id=eq.${id}`, {
+                    method: 'DELETE',
+                    headers: getDbHeaders()
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Database DELETE request failed with status: ${response.status}`);
+                }
+
+                console.log(`Pin ${id} successfully deleted from database.`);
+            } catch (error) {
+                console.error("Error deleting pin from database:", error);
+            }
+        }
+
+        // Setup Welcome Modal Logic
+        function setupWelcomeModal() {
+            const welcomeModal = document.getElementById('welcome-modal');
+            const welcomeCloseBtn = document.getElementById('welcome-close');
+            const welcomeStartBtn = document.getElementById('welcome-start');
+
+            const closeWelcome = () => welcomeModal.classList.add('hidden');
+
+            welcomeCloseBtn.addEventListener('click', closeWelcome);
+            welcomeStartBtn.addEventListener('click', closeWelcome);
+
+            welcomeModal.addEventListener('click', (e) => {
+                // If they clicked the background overlay itself, close it
+                if (e.target === welcomeModal) {
+                    closeWelcome();
+                }
+            });
+        }
+
+        // Bootstrapping the app once window loads
+        window.addEventListener('load', () => {
+            loadGoogleMaps();
+            setupWelcomeModal();
+        });
+
+    </script>
+</body>
+
+</html>
